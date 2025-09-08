@@ -7,7 +7,7 @@ imageio
 joblib
 matplotlib
 numba
-numpy
+numpy<2.0
 opencv-python-headless[ffmpeg]
 pilgram
 git+https://github.com/WASasquatch/ffmpy.git
