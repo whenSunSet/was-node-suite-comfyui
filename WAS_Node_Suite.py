@@ -7309,6 +7309,9 @@ class WAS_Image_Save:
                 "embed_workflow": (["true", "false"],),
                 "show_previews": (["true", "false"],),
             },
+            "optional": {
+                "aigc_metadata": ("STRING", {"default": "", "multiline": True}),
+            },
             "hidden": {
                 "prompt": "PROMPT", "extra_pnginfo": "EXTRA_PNGINFO"
             },
@@ -7327,7 +7330,7 @@ class WAS_Image_Save:
                         extension='png', dpi=96, quality=100, optimize_image="true", lossless_webp="false", prompt=None, extra_pnginfo=None,
                         overwrite_mode='false', filename_number_padding=4, filename_number_start='false',
                         show_history='false', show_history_by_prefix="true", embed_workflow="true",
-                        show_previews="true"):
+                        show_previews="true", aigc_metadata=""):
 
         delimiter = filename_delimiter
         number_padding = filename_number_padding
@@ -7397,6 +7400,7 @@ class WAS_Image_Save:
             img = Image.fromarray(np.clip(i, 0, 255).astype(np.uint8))
 
             # Delegate metadata/pnginfo
+            exif_bytes_for_jpeg = None
             if extension == 'webp':
                 img_exif = img.getexif()
                 if embed_workflow == 'true':
@@ -7409,6 +7413,13 @@ class WAS_Image_Save:
                         for x in extra_pnginfo:
                             workflow_metadata += json.dumps(extra_pnginfo[x])
                     img_exif[0x010e] = "Workflow:" + workflow_metadata
+                # Add AIGC metadata to EXIF UserComment (0x9286) per alternative scheme
+                if isinstance(aigc_metadata, str) and len(aigc_metadata.strip()) > 0:
+                    try:
+                        prefix = b'ASCII\x00\x00\x00'
+                        img_exif[0x9286] = prefix + aigc_metadata.encode('utf-8', 'ignore')
+                    except Exception:
+                        pass
                 exif_data = img_exif.tobytes()
             else:
                 metadata = PngInfo()
@@ -7418,7 +7429,22 @@ class WAS_Image_Save:
                     if extra_pnginfo is not None:
                         for x in extra_pnginfo:
                             metadata.add_text(x, json.dumps(extra_pnginfo[x]))
+                # Add AIGC metadata for PNG as tEXt chunk with key "AIGC" per alternative scheme
+                if isinstance(aigc_metadata, str) and len(aigc_metadata.strip()) > 0:
+                    try:
+                        metadata.add_text("AIGC", aigc_metadata)
+                    except Exception:
+                        pass
                 exif_data = metadata
+                # Prepare EXIF for JPEG if AIGC metadata is provided
+                if extension in ["jpg", "jpeg"] and isinstance(aigc_metadata, str) and len(aigc_metadata.strip()) > 0:
+                    try:
+                        img_exif_jpeg = img.getexif()
+                        prefix = b'ASCII\x00\x00\x00'
+                        img_exif_jpeg[0x9286] = prefix + aigc_metadata.encode('utf-8', 'ignore')
+                        exif_bytes_for_jpeg = img_exif_jpeg.tobytes()
+                    except Exception:
+                        exif_bytes_for_jpeg = None
 
             # Delegate the filename stuffs
             if overwrite_mode == 'prefix_as_filename':
@@ -7435,8 +7461,12 @@ class WAS_Image_Save:
             try:
                 output_file = os.path.abspath(os.path.join(output_path, file))
                 if extension in ["jpg", "jpeg"]:
-                    img.save(output_file,
-                             quality=quality, optimize=optimize_image, dpi=(dpi, dpi))
+                    if exif_bytes_for_jpeg is not None:
+                        img.save(output_file,
+                                 quality=quality, optimize=optimize_image, dpi=(dpi, dpi), exif=exif_bytes_for_jpeg)
+                    else:
+                        img.save(output_file,
+                                 quality=quality, optimize=optimize_image, dpi=(dpi, dpi))
                 elif extension == 'webp':
                     img.save(output_file,
                              quality=quality, lossless=lossless_webp, exif=exif_data)
